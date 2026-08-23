@@ -159,6 +159,64 @@ func TestDebugServerServesPprofOnLoopback(t *testing.T) {
 	}
 }
 
+func TestDebugMuxRegistersEveryPprofRoute(t *testing.T) {
+	mux := newDebugMux()
+	tests := []struct {
+		path        string
+		wantPattern string
+	}{
+		{path: "/debug/pprof/", wantPattern: "/debug/pprof/"},
+		{path: "/debug/pprof/goroutine", wantPattern: "/debug/pprof/"},
+		{path: "/debug/pprof/cmdline", wantPattern: "/debug/pprof/cmdline"},
+		{path: "/debug/pprof/profile", wantPattern: "/debug/pprof/profile"},
+		{path: "/debug/pprof/symbol", wantPattern: "/debug/pprof/symbol"},
+		{path: "/debug/pprof/trace", wantPattern: "/debug/pprof/trace"},
+		{path: "/unrelated", wantPattern: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			_, pattern := mux.Handler(req)
+			if pattern != tt.wantPattern {
+				t.Fatalf("pattern = %q, want %q", pattern, tt.wantPattern)
+			}
+		})
+	}
+}
+
+func TestDebugServerDoesNotServeDefaultMuxHandlers(t *testing.T) {
+	previousDefaultMux := http.DefaultServeMux
+	http.DefaultServeMux = http.NewServeMux()
+	t.Cleanup(func() {
+		http.DefaultServeMux = previousDefaultMux
+	})
+	http.HandleFunc("/unrelated-default-handler", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	srv, err := startDebugServer(config.DebugConfig{Bind: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("startDebugServer: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown debug server: %v", err)
+		}
+	})
+
+	client := &http.Client{Timeout: time.Second}
+	resp, err := client.Get("http://" + srv.Addr + "/unrelated-default-handler")
+	if err != nil {
+		t.Fatalf("GET unrelated default handler: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestDebugServerRejectsPublicBindWithoutAcknowledgement(t *testing.T) {
 	_, err := startDebugServer(config.DebugConfig{Bind: "0.0.0.0:0"})
 	if err == nil {

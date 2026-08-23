@@ -8,7 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
@@ -153,6 +153,16 @@ func newPublicMux(whipHandler, issueToken http.HandlerFunc) *http.ServeMux {
 	return mux
 }
 
+func newDebugMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	return mux
+}
+
 func startDebugServer(cfg config.DebugConfig) (*http.Server, error) {
 	if cfg.Bind == "" {
 		return nil, nil
@@ -181,7 +191,7 @@ func startDebugServer(cfg config.DebugConfig) (*http.Server, error) {
 
 	srv := &http.Server{
 		Addr:              listener.Addr().String(),
-		Handler:           http.DefaultServeMux,
+		Handler:           newDebugMux(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
