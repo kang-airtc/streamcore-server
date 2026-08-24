@@ -267,6 +267,8 @@ func (p *Pipeline) handleRealtimeToolCall(ctx context.Context, name string, args
 		return p.handleVisionToolCall(llm.ToolCall{Name: name, Arguments: args})
 	case strings.HasPrefix(name, "car."):
 		return p.handleCarToolCall(llm.ToolCall{Name: name, Arguments: args})
+	case strings.HasPrefix(name, "bot."):
+		return p.handleBotToolCall(llm.ToolCall{Name: name, Arguments: args})
 	}
 
 	if p.pluginMgr == nil {

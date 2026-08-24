@@ -42,15 +42,18 @@ func (t *CarTool) Execute(params json.RawMessage) (string, error) {
 // All returns the full set of drivetrain tools to register with the
 // plugin manager. Wire them in `main.go` with `pluginMgr.RegisterNative`.
 func All() []plugin.Tool {
-	move := paramsSchema(`How long to drive in milliseconds (clamped to 100..10000).`, 1500)
-	short := paramsSchema(`How long to drive in milliseconds (clamped to 100..10000).`, 800)
+	move := paramsSchema(`How long to keep moving, in milliseconds (clamped to 100..10000). Ignored when continuous is true.`, 1500)
+	short := paramsSchema(`How long to keep turning, in milliseconds (clamped to 100..10000).`, 800)
 	fancy := paramsSchema(`Total length of the fancy-moves routine in milliseconds.`, 3000)
 
+	// Descriptions stay device-neutral: the same tools drive a two-wheel car
+	// and walk a rigged character, and the server has no idea which is on the
+	// other end. Say "drive" here and a walking bot narrates itself as a car.
 	return []plugin.Tool{
-		&CarTool{"car.forward", "Drive the desktop-car robot straight forward. Use when the user asks the robot to go, move, advance, or come closer.", move},
-		&CarTool{"car.backward", "Drive the desktop-car robot straight backward. Use when the user asks the robot to back up, reverse, or move away.", move},
-		&CarTool{"car.turn_left", "Spin the desktop-car robot in place to its left (counter-clockwise). Use when the user asks to turn left or look left.", short},
-		&CarTool{"car.turn_right", "Spin the desktop-car robot in place to its right (clockwise). Use when the user asks to turn right or look right.", short},
+		&CarTool{"car.forward", "Move the robot forward. Use when the user asks it to go, move, walk, drive, advance, or come closer.", move},
+		&CarTool{"car.backward", "Move the robot backward. Use when the user asks it to back up, reverse, or move away.", move},
+		&CarTool{"car.turn_left", "Turn the robot in place to its own left (counter-clockwise). Use when the user asks it to turn left.", short},
+		&CarTool{"car.turn_right", "Turn the robot in place to its own right (clockwise). Use when the user asks it to turn right.", short},
 		&CarTool{"car.pivot_forward_left", "Curve forward and to the left by driving only the right wheel. Gentler than a turn-in-place.", short},
 		&CarTool{"car.pivot_forward_right", "Curve forward and to the right by driving only the left wheel. Gentler than a turn-in-place.", short},
 		&CarTool{"car.pivot_back_left", "Curve backward and to the left by driving only the right wheel in reverse.", short},
@@ -74,10 +77,18 @@ func paramsSchema(durationDesc string, defaultDuration int) json.RawMessage {
 			},
 			"speed_percent": map[string]any{
 				"type":        "integer",
-				"description": "Motor duty cycle, 0..100. Defaults to 80 if omitted.",
+				"description": "How hard to move, 0..100. Defaults to 80 if omitted.",
 				"default":     80,
 				"minimum":     0,
 				"maximum":     100,
+			},
+			"continuous": map[string]any{
+				"type": "boolean",
+				"description": "Set true when the user asks the robot to keep going until told to stop " +
+					"— 'keep walking', 'go until I say stop', 'keep driving'. It then moves until it " +
+					"runs out of room or car.stop arrives, and duration_ms is ignored. Leave unset for " +
+					"a normal single move.",
+				"default": false,
 			},
 		},
 	}

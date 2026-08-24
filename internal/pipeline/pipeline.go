@@ -290,6 +290,10 @@ func New(
 				if strings.HasPrefix(call.Name, "car.") {
 					return p.handleCarToolCall(call)
 				}
+				// Intercept bot.* — arm and head poses for a rigged client.
+				if strings.HasPrefix(call.Name, "bot.") {
+					return p.handleBotToolCall(call)
+				}
 				tool, ok := pluginMgr.GetTool(call.Name)
 				if !ok {
 					return "", fmt.Errorf("unknown tool: %s", call.Name)
@@ -419,6 +423,10 @@ type carCommandPayload struct {
 	Action       string `json:"action"`
 	DurationMs   uint32 `json:"duration_ms,omitempty"`
 	SpeedPercent uint8  `json:"speed_percent,omitempty"`
+	// Continuous means "keep going until stopped" rather than for a duration.
+	// Omitted unless asked for, so firmware that has never heard of it — which
+	// is all of it — carries on reading the duration exactly as before.
+	Continuous bool `json:"continuous,omitempty"`
 }
 
 // handleCarToolCall turns a "car.*" LLM tool invocation into a topic-
@@ -431,6 +439,7 @@ func (p *Pipeline) handleCarToolCall(call llm.ToolCall) (string, error) {
 	var args struct {
 		DurationMs   *uint32 `json:"duration_ms,omitempty"`
 		SpeedPercent *uint8  `json:"speed_percent,omitempty"`
+		Continuous   *bool   `json:"continuous,omitempty"`
 	}
 	if len(call.Arguments) > 0 {
 		_ = json.Unmarshal(call.Arguments, &args)
@@ -442,6 +451,9 @@ func (p *Pipeline) handleCarToolCall(call llm.ToolCall) (string, error) {
 	}
 	if args.SpeedPercent != nil {
 		payload.SpeedPercent = clampU8(*args.SpeedPercent, 0, 100)
+	}
+	if args.Continuous != nil {
+		payload.Continuous = *args.Continuous
 	}
 
 	body, err := json.Marshal(payload)
@@ -463,6 +475,72 @@ func (p *Pipeline) handleCarToolCall(call llm.ToolCall) (string, error) {
 	return carAck(payload), nil
 }
 
+// botGesturePayload is the JSON a rigged client decodes inside the data
+// packet for a "bot.gesture" topic.
+type botGesturePayload struct {
+	Action     string `json:"action"`
+	DurationMs uint32 `json:"duration_ms,omitempty"`
+}
+
+// handleBotToolCall turns a "bot.*" LLM tool invocation into a topic-
+// addressed data-channel packet. Same fire-and-forget shape as the car
+// commands: the client is not asked to confirm, and the spoken
+// acknowledgement is synthesized here.
+func (p *Pipeline) handleBotToolCall(call llm.ToolCall) (string, error) {
+	action := strings.TrimPrefix(call.Name, "bot.")
+
+	var args struct {
+		DurationMs *uint32 `json:"duration_ms,omitempty"`
+	}
+	if len(call.Arguments) > 0 {
+		_ = json.Unmarshal(call.Arguments, &args)
+	}
+
+	payload := botGesturePayload{Action: action}
+	if args.DurationMs != nil {
+		payload.DurationMs = clampU32(*args.DurationMs, 0, 10000)
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal bot payload: %w", err)
+	}
+
+	if err := p.sendEvent(dcDataPacket{
+		Type:    "data",
+		Topic:   tools.BotGestureTopic,
+		Payload: base64.StdEncoding.EncodeToString(body),
+	}); err != nil {
+		return "", fmt.Errorf("send bot gesture: %w", err)
+	}
+
+	log.Printf("[bot] dispatched gesture=%s duration_ms=%d", payload.Action, payload.DurationMs)
+
+	return botAck(payload.Action), nil
+}
+
+func botAck(action string) string {
+	switch action {
+	case "wave":
+		return "Waving."
+	case "raise_arms":
+		return "Arms up!"
+	case "nod":
+		return "Nodding."
+	case "shake_head":
+		return "Shaking my head."
+	case "rest":
+		return "Alright, back to normal."
+	case "point_left", "point_right":
+		return "Pointing."
+	default:
+		return "OK, " + strings.ReplaceAll(action, "_", " ") + "."
+	}
+}
+
+// carAck is what the model reads back, so it stays device-neutral: the same
+// tools drive a car and walk a rigged bot, and "driving forward" out of a
+// walking character is the sort of thing a user notices immediately.
 func carAck(p carCommandPayload) string {
 	switch p.Action {
 	case "stop":
@@ -472,8 +550,14 @@ func carAck(p carCommandPayload) string {
 	case "shake":
 		return "Shaking."
 	case "forward":
-		return "Driving forward."
+		if p.Continuous {
+			return "On my way — say stop when you want me to halt."
+		}
+		return "Moving forward."
 	case "backward":
+		if p.Continuous {
+			return "Heading back — say stop when you want me to halt."
+		}
 		return "Backing up."
 	case "turn_left":
 		return "Turning left."

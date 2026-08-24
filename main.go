@@ -45,10 +45,14 @@ func main() {
 	}
 	defer pluginMgr.Close()
 
-	// Native drivetrain tools for the desktop-car firmware. These are
-	// metadata-only — the pipeline intercepts "car.*" calls and writes a
-	// data-channel command directly to the device.
+	// Native drivetrain tools for the desktop-car firmware, and arm/head
+	// gestures for a rigged client. Both are metadata-only — the pipeline
+	// intercepts "car.*" and "bot.*" calls and writes a data-channel command
+	// directly to the device.
 	for _, t := range tools.All() {
+		pluginMgr.RegisterNative(t)
+	}
+	for _, t := range tools.Gestures() {
 		pluginMgr.RegisterNative(t)
 	}
 
