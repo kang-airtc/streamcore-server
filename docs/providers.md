@@ -68,7 +68,7 @@ The model has no idea what product it is deployed in — if you want it to ident
 | Capability | Behaviour |
 |---|---|
 | Turn detection and barge-in | Owned entirely by the model's server-side VAD. See below |
-| Plugins, skills, vision, car control | Registered as function tools; the same handlers run in both modes |
+| Plugins, skills, vision, movement control | Registered as function tools; the same handlers run in both modes |
 | RAG | Exposed as a `knowledge_search` tool the model calls on demand, rather than being injected into every prompt |
 | Hosted search | `web_search` and `x_search` run on xAI's side with no local plugin |
 | Rolling summary, misunderstanding detection | Not used — these operate on STT transcripts the model never emits |

@@ -8,12 +8,19 @@ import (
 )
 
 // BotGestureTopic is the data-channel topic a rigged client listens on for
-// arm and head poses. Separate from CarCommandTopic because a two-wheel
+// arm and head poses. Separate from MovementCommandTopic because a two-wheel
 // drivetrain has neither: a device receiving these can ignore the topic
-// wholesale rather than having to know which car.* actions it cannot do.
+// wholesale rather than having to know which movement.* actions it cannot do.
 const BotGestureTopic = "bot.gesture"
 
-// BotTool is a metadata-only Tool, same as CarTool — the pipeline
+// Duration limits for the gesture tools, advertised and enforced from here for
+// the same reason as the movement ones.
+const (
+	MinGestureMs = 200
+	MaxGestureMs = 10000
+)
+
+// BotTool is a metadata-only Tool, same as MovementTool — the pipeline
 // intercepts "bot.*" names and emits a data-channel packet rather than
 // ever reaching Execute.
 type BotTool struct {
@@ -34,13 +41,13 @@ func (t *BotTool) Execute(params json.RawMessage) (string, error) {
 }
 
 // Gestures returns the arm and head tools to register with the plugin
-// manager. Left and right are the bot's own, matching car.turn_left.
+// manager. Left and right are the bot's own, matching movement.turn_left.
 func Gestures() []plugin.Tool {
-	hold := gestureSchema("How long to hold the pose in milliseconds (clamped to 200..10000).", 2500)
-	beat := gestureSchema("How long to keep going in milliseconds (clamped to 200..10000).", 1800)
+	hold := gestureSchema("How long to hold the pose in milliseconds.", 2500)
+	beat := gestureSchema("How long to keep going in milliseconds.", 1800)
 	// A sweep is slow: cut it short and the head stops halfway through, which
 	// reads as the bot changing its mind rather than looking around.
-	sweep := gestureSchema("How long to keep looking around in milliseconds (clamped to 200..10000).", 4500)
+	sweep := gestureSchema("How long to keep looking around in milliseconds.", 4500)
 
 	return []plugin.Tool{
 		&BotTool{"bot.wave", "Wave hello or goodbye with one hand. Use when the user greets the robot, says hi or bye, waves at it, or asks it to wave.", beat},
@@ -65,11 +72,12 @@ func gestureSchema(durationDesc string, defaultDuration int) json.RawMessage {
 		"type": "object",
 		"properties": map[string]any{
 			"duration_ms": map[string]any{
-				"type":        "integer",
-				"description": durationDesc,
-				"default":     defaultDuration,
-				"minimum":     200,
-				"maximum":     10000,
+				"type": "integer",
+				"description": fmt.Sprintf("%s Clamped to %d..%d.",
+					durationDesc, MinGestureMs, MaxGestureMs),
+				"default": defaultDuration,
+				"minimum": MinGestureMs,
+				"maximum": MaxGestureMs,
 			},
 		},
 	}

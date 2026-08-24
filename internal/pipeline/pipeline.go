@@ -285,10 +285,10 @@ func New(
 				if call.Name == visionToolName {
 					return p.handleVisionToolCall(call)
 				}
-				// Intercept car.* — translate to a data-channel command for the
+				// Intercept movement.* — translate to a data-channel command for the
 				// firmware's motor controller. No subprocess plugin involved.
-				if strings.HasPrefix(call.Name, "car.") {
-					return p.handleCarToolCall(call)
+				if strings.HasPrefix(call.Name, "movement.") {
+					return p.handleMovementToolCall(call)
 				}
 				// Intercept bot.* — arm and head poses for a rigged client.
 				if strings.HasPrefix(call.Name, "bot.") {
@@ -413,13 +413,13 @@ func (p *Pipeline) HandleDataChannelMessage(msg string) {
 // dispatches via its `on_data` callback. Payload is base64-encoded JSON.
 type dcDataPacket struct {
 	Type    string `json:"type"`    // always "data"
-	Topic   string `json:"topic"`   // e.g. "car.command"
+	Topic   string `json:"topic"`   // e.g. "movement.command"
 	Payload string `json:"payload"` // base64-encoded JSON
 }
 
-// carCommandPayload is the JSON the firmware decodes inside the data
-// packet for a "car.command" topic.
-type carCommandPayload struct {
+// movementCommandPayload is the JSON the firmware decodes inside the data
+// packet for a "movement.command" topic.
+type movementCommandPayload struct {
 	Action       string `json:"action"`
 	DurationMs   uint32 `json:"duration_ms,omitempty"`
 	SpeedPercent uint8  `json:"speed_percent,omitempty"`
@@ -429,12 +429,12 @@ type carCommandPayload struct {
 	Continuous bool `json:"continuous,omitempty"`
 }
 
-// handleCarToolCall turns a "car.*" LLM tool invocation into a topic-
+// handleMovementToolCall turns a "movement.*" LLM tool invocation into a topic-
 // addressed data-channel packet that the firmware's `on_data` handler
 // will dispatch to its MotorController. Returns a short spoken-friendly
 // confirmation for the LLM to read back.
-func (p *Pipeline) handleCarToolCall(call llm.ToolCall) (string, error) {
-	action := strings.TrimPrefix(call.Name, "car.")
+func (p *Pipeline) handleMovementToolCall(call llm.ToolCall) (string, error) {
+	action := strings.TrimPrefix(call.Name, "movement.")
 
 	var args struct {
 		DurationMs   *uint32 `json:"duration_ms,omitempty"`
@@ -445,9 +445,9 @@ func (p *Pipeline) handleCarToolCall(call llm.ToolCall) (string, error) {
 		_ = json.Unmarshal(call.Arguments, &args)
 	}
 
-	payload := carCommandPayload{Action: action}
+	payload := movementCommandPayload{Action: action}
 	if args.DurationMs != nil {
-		payload.DurationMs = clampU32(*args.DurationMs, 0, 10000)
+		payload.DurationMs = clampU32(*args.DurationMs, tools.MinMovementMs, tools.MaxMovementMs)
 	}
 	if args.SpeedPercent != nil {
 		payload.SpeedPercent = clampU8(*args.SpeedPercent, 0, 100)
@@ -458,21 +458,21 @@ func (p *Pipeline) handleCarToolCall(call llm.ToolCall) (string, error) {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("marshal car payload: %w", err)
+		return "", fmt.Errorf("marshal movement payload: %w", err)
 	}
 
 	if err := p.sendEvent(dcDataPacket{
 		Type:    "data",
-		Topic:   tools.CarCommandTopic,
+		Topic:   tools.MovementCommandTopic,
 		Payload: base64.StdEncoding.EncodeToString(body),
 	}); err != nil {
-		return "", fmt.Errorf("send car command: %w", err)
+		return "", fmt.Errorf("send movement command: %w", err)
 	}
 
-	log.Printf("[car] dispatched action=%s duration_ms=%d speed=%d%%",
+	log.Printf("[movement] dispatched action=%s duration_ms=%d speed=%d%%",
 		payload.Action, payload.DurationMs, payload.SpeedPercent)
 
-	return carAck(payload), nil
+	return movementAck(payload), nil
 }
 
 // botGesturePayload is the JSON a rigged client decodes inside the data
@@ -498,7 +498,7 @@ func (p *Pipeline) handleBotToolCall(call llm.ToolCall) (string, error) {
 
 	payload := botGesturePayload{Action: action}
 	if args.DurationMs != nil {
-		payload.DurationMs = clampU32(*args.DurationMs, 0, 10000)
+		payload.DurationMs = clampU32(*args.DurationMs, tools.MinGestureMs, tools.MaxGestureMs)
 	}
 
 	body, err := json.Marshal(payload)
@@ -538,10 +538,10 @@ func botAck(action string) string {
 	}
 }
 
-// carAck is what the model reads back, so it stays device-neutral: the same
+// movementAck is what the model reads back, so it stays device-neutral: the same
 // tools drive a car and walk a rigged bot, and "driving forward" out of a
 // walking character is the sort of thing a user notices immediately.
-func carAck(p carCommandPayload) string {
+func movementAck(p movementCommandPayload) string {
 	switch p.Action {
 	case "stop":
 		return "Stopping."

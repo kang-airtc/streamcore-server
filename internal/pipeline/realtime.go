@@ -86,7 +86,7 @@ func (p *Pipeline) runRealtime() {
 }
 
 // realtimeTools collects everything the model may call: plugin tools, the
-// car controls, and knowledge_search when RAG is configured.
+// movement controls, and knowledge_search when RAG is configured.
 func (p *Pipeline) realtimeTools() []realtime.ToolDefinition {
 	var defs []realtime.ToolDefinition
 
@@ -253,7 +253,7 @@ func (p *Pipeline) runRealtimeOutbound() {
 }
 
 // handleRealtimeToolCall dispatches a model function call. It mirrors the
-// classic path's handler so vision, car control, and plugins behave
+// classic path's handler so vision, movement control, and plugins behave
 // identically in both modes.
 func (p *Pipeline) handleRealtimeToolCall(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if len(args) == 0 {
@@ -265,8 +265,8 @@ func (p *Pipeline) handleRealtimeToolCall(ctx context.Context, name string, args
 		return p.realtimeRAGSearch(ctx, args)
 	case name == visionToolName:
 		return p.handleVisionToolCall(llm.ToolCall{Name: name, Arguments: args})
-	case strings.HasPrefix(name, "car."):
-		return p.handleCarToolCall(llm.ToolCall{Name: name, Arguments: args})
+	case strings.HasPrefix(name, "movement."):
+		return p.handleMovementToolCall(llm.ToolCall{Name: name, Arguments: args})
 	case strings.HasPrefix(name, "bot."):
 		return p.handleBotToolCall(llm.ToolCall{Name: name, Arguments: args})
 	}

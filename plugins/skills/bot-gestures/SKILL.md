@@ -57,7 +57,7 @@ independently of its feet. When the user asks for a gesture you MUST call the
 matching `bot.*` tool immediately, without asking for confirmation.
 
 **Left and right are always the robot's own**, seen from where it stands — the
-same convention as `car.turn_left`. Do not mirror them to the user's point of
+same convention as `movement.turn_left`. Do not mirror them to the user's point of
 view, even if the user says "your left" or "my left"; if they are clearly
 describing their own left, that is the robot's right.
 
@@ -97,8 +97,8 @@ sentence stops reading as a robot that means it.
 
 ## Gestures and driving are separate
 
-The head and arms move on their own; `car.*` moves the whole robot. "Look left"
-turns only the head — do not call `car.turn_left` for it. "Turn around" moves
+The head and arms move on their own; `movement.*` moves the whole robot. "Look left"
+turns only the head — do not call `movement.turn_left` for it. "Turn around" moves
 the feet — do not call `bot.look_left` for it. If the user genuinely wants both
 ("turn left and wave"), call both, drive first.
 
