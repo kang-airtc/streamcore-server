@@ -285,10 +285,14 @@ func New(
 				if call.Name == visionToolName {
 					return p.handleVisionToolCall(call)
 				}
-				// Intercept car.* — translate to a data-channel command for the
+				// Intercept movement.* — translate to a data-channel command for the
 				// firmware's motor controller. No subprocess plugin involved.
-				if strings.HasPrefix(call.Name, "car.") {
-					return p.handleCarToolCall(call)
+				if strings.HasPrefix(call.Name, "movement.") {
+					return p.handleMovementToolCall(call)
+				}
+				// Intercept bot.* — arm and head poses for a rigged client.
+				if strings.HasPrefix(call.Name, "bot.") {
+					return p.handleBotToolCall(call)
 				}
 				tool, ok := pluginMgr.GetTool(call.Name)
 				if !ok {
@@ -409,61 +413,135 @@ func (p *Pipeline) HandleDataChannelMessage(msg string) {
 // dispatches via its `on_data` callback. Payload is base64-encoded JSON.
 type dcDataPacket struct {
 	Type    string `json:"type"`    // always "data"
-	Topic   string `json:"topic"`   // e.g. "car.command"
+	Topic   string `json:"topic"`   // e.g. "movement.command"
 	Payload string `json:"payload"` // base64-encoded JSON
 }
 
-// carCommandPayload is the JSON the firmware decodes inside the data
-// packet for a "car.command" topic.
-type carCommandPayload struct {
+// movementCommandPayload is the JSON the firmware decodes inside the data
+// packet for a "movement.command" topic.
+type movementCommandPayload struct {
 	Action       string `json:"action"`
 	DurationMs   uint32 `json:"duration_ms,omitempty"`
 	SpeedPercent uint8  `json:"speed_percent,omitempty"`
+	// Continuous means "keep going until stopped" rather than for a duration.
+	// Omitted unless asked for, so firmware that has never heard of it — which
+	// is all of it — carries on reading the duration exactly as before.
+	Continuous bool `json:"continuous,omitempty"`
 }
 
-// handleCarToolCall turns a "car.*" LLM tool invocation into a topic-
+// handleMovementToolCall turns a "movement.*" LLM tool invocation into a topic-
 // addressed data-channel packet that the firmware's `on_data` handler
 // will dispatch to its MotorController. Returns a short spoken-friendly
 // confirmation for the LLM to read back.
-func (p *Pipeline) handleCarToolCall(call llm.ToolCall) (string, error) {
-	action := strings.TrimPrefix(call.Name, "car.")
+func (p *Pipeline) handleMovementToolCall(call llm.ToolCall) (string, error) {
+	action := strings.TrimPrefix(call.Name, "movement.")
 
 	var args struct {
 		DurationMs   *uint32 `json:"duration_ms,omitempty"`
 		SpeedPercent *uint8  `json:"speed_percent,omitempty"`
+		Continuous   *bool   `json:"continuous,omitempty"`
 	}
 	if len(call.Arguments) > 0 {
 		_ = json.Unmarshal(call.Arguments, &args)
 	}
 
-	payload := carCommandPayload{Action: action}
+	payload := movementCommandPayload{Action: action}
 	if args.DurationMs != nil {
-		payload.DurationMs = clampU32(*args.DurationMs, 0, 10000)
+		payload.DurationMs = clampU32(*args.DurationMs, tools.MinMovementMs, tools.MaxMovementMs)
 	}
 	if args.SpeedPercent != nil {
 		payload.SpeedPercent = clampU8(*args.SpeedPercent, 0, 100)
 	}
+	if args.Continuous != nil {
+		payload.Continuous = *args.Continuous
+	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("marshal car payload: %w", err)
+		return "", fmt.Errorf("marshal movement payload: %w", err)
 	}
 
 	if err := p.sendEvent(dcDataPacket{
 		Type:    "data",
-		Topic:   tools.CarCommandTopic,
+		Topic:   tools.MovementCommandTopic,
 		Payload: base64.StdEncoding.EncodeToString(body),
 	}); err != nil {
-		return "", fmt.Errorf("send car command: %w", err)
+		return "", fmt.Errorf("send movement command: %w", err)
 	}
 
-	log.Printf("[car] dispatched action=%s duration_ms=%d speed=%d%%",
+	log.Printf("[movement] dispatched action=%s duration_ms=%d speed=%d%%",
 		payload.Action, payload.DurationMs, payload.SpeedPercent)
 
-	return carAck(payload), nil
+	return movementAck(payload), nil
 }
 
-func carAck(p carCommandPayload) string {
+// botGesturePayload is the JSON a rigged client decodes inside the data
+// packet for a "bot.gesture" topic.
+type botGesturePayload struct {
+	Action     string `json:"action"`
+	DurationMs uint32 `json:"duration_ms,omitempty"`
+}
+
+// handleBotToolCall turns a "bot.*" LLM tool invocation into a topic-
+// addressed data-channel packet. Same fire-and-forget shape as the car
+// commands: the client is not asked to confirm, and the spoken
+// acknowledgement is synthesized here.
+func (p *Pipeline) handleBotToolCall(call llm.ToolCall) (string, error) {
+	action := strings.TrimPrefix(call.Name, "bot.")
+
+	var args struct {
+		DurationMs *uint32 `json:"duration_ms,omitempty"`
+	}
+	if len(call.Arguments) > 0 {
+		_ = json.Unmarshal(call.Arguments, &args)
+	}
+
+	payload := botGesturePayload{Action: action}
+	if args.DurationMs != nil {
+		payload.DurationMs = clampU32(*args.DurationMs, tools.MinGestureMs, tools.MaxGestureMs)
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal bot payload: %w", err)
+	}
+
+	if err := p.sendEvent(dcDataPacket{
+		Type:    "data",
+		Topic:   tools.BotGestureTopic,
+		Payload: base64.StdEncoding.EncodeToString(body),
+	}); err != nil {
+		return "", fmt.Errorf("send bot gesture: %w", err)
+	}
+
+	log.Printf("[bot] dispatched gesture=%s duration_ms=%d", payload.Action, payload.DurationMs)
+
+	return botAck(payload.Action), nil
+}
+
+func botAck(action string) string {
+	switch action {
+	case "wave":
+		return "Waving."
+	case "raise_arms":
+		return "Arms up!"
+	case "nod":
+		return "Nodding."
+	case "shake_head":
+		return "Shaking my head."
+	case "rest":
+		return "Alright, back to normal."
+	case "point_left", "point_right":
+		return "Pointing."
+	default:
+		return "OK, " + strings.ReplaceAll(action, "_", " ") + "."
+	}
+}
+
+// movementAck is what the model reads back, so it stays device-neutral: the same
+// tools drive a car and walk a rigged bot, and "driving forward" out of a
+// walking character is the sort of thing a user notices immediately.
+func movementAck(p movementCommandPayload) string {
 	switch p.Action {
 	case "stop":
 		return "Stopping."
@@ -472,8 +550,14 @@ func carAck(p carCommandPayload) string {
 	case "shake":
 		return "Shaking."
 	case "forward":
-		return "Driving forward."
+		if p.Continuous {
+			return "On my way — say stop when you want me to halt."
+		}
+		return "Moving forward."
 	case "backward":
+		if p.Continuous {
+			return "Heading back — say stop when you want me to halt."
+		}
 		return "Backing up."
 	case "turn_left":
 		return "Turning left."
