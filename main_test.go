@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/streamcoreai/streamcore-server/internal/config"
 	"github.com/streamcoreai/streamcore-server/internal/signaling"
 )
 
@@ -118,5 +121,108 @@ func TestResourceIDCannotBeMintedWithoutTheAPIKey(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestPublicMuxDoesNotServePprof(t *testing.T) {
+	mux := newPublicMux(func(http.ResponseWriter, *http.Request) {}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestDebugServerServesPprofOnLoopback(t *testing.T) {
+	srv, err := startDebugServer(config.DebugConfig{Bind: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("startDebugServer: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown debug server: %v", err)
+		}
+	})
+
+	resp, err := http.Get("http://" + srv.Addr + "/debug/pprof/")
+	if err != nil {
+		t.Fatalf("GET pprof index: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestDebugMuxRegistersEveryPprofRoute(t *testing.T) {
+	mux := newDebugMux()
+	tests := []struct {
+		path        string
+		wantPattern string
+	}{
+		{path: "/debug/pprof/", wantPattern: "/debug/pprof/"},
+		{path: "/debug/pprof/goroutine", wantPattern: "/debug/pprof/"},
+		{path: "/debug/pprof/cmdline", wantPattern: "/debug/pprof/cmdline"},
+		{path: "/debug/pprof/profile", wantPattern: "/debug/pprof/profile"},
+		{path: "/debug/pprof/symbol", wantPattern: "/debug/pprof/symbol"},
+		{path: "/debug/pprof/trace", wantPattern: "/debug/pprof/trace"},
+		{path: "/unrelated", wantPattern: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			_, pattern := mux.Handler(req)
+			if pattern != tt.wantPattern {
+				t.Fatalf("pattern = %q, want %q", pattern, tt.wantPattern)
+			}
+		})
+	}
+}
+
+func TestDebugServerDoesNotServeDefaultMuxHandlers(t *testing.T) {
+	previousDefaultMux := http.DefaultServeMux
+	http.DefaultServeMux = http.NewServeMux()
+	t.Cleanup(func() {
+		http.DefaultServeMux = previousDefaultMux
+	})
+	http.HandleFunc("/unrelated-default-handler", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	srv, err := startDebugServer(config.DebugConfig{Bind: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("startDebugServer: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			t.Errorf("shutdown debug server: %v", err)
+		}
+	})
+
+	client := &http.Client{Timeout: time.Second}
+	resp, err := client.Get("http://" + srv.Addr + "/unrelated-default-handler")
+	if err != nil {
+		t.Fatalf("GET unrelated default handler: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestDebugServerRejectsPublicBindWithoutAcknowledgement(t *testing.T) {
+	_, err := startDebugServer(config.DebugConfig{Bind: "0.0.0.0:0"})
+	if err == nil {
+		t.Fatal("public debug bind was accepted without allow_public")
+	}
+	if !strings.Contains(err.Error(), "debug.allow_public = true") {
+		t.Fatalf("error = %q, want allow_public guidance", err)
 	}
 }
